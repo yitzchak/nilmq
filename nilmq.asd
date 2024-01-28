@@ -5,11 +5,14 @@
   :version "0.1"
   :homepage "https://yitzchak.github.io/nilmq/"
   :bug-tracker "https://github.com/yitzchak/nilmq/issues"
-  :depends-on ("usocket")
+  :depends-on ("closer-mop"
+               "nontrivial-gray-streams"
+               "usocket")
   :components ((:module "code"
                 :components
                 ((:file "packages")
                  (:file "interface")
+                 (:file "stream")
                  (:file "null-client")))))
 
 (asdf:defsystem "nilmq/test"
