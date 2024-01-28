@@ -5,13 +5,15 @@
   :version "0.1"
   :homepage "https://yitzchak.github.io/nilmq/"
   :bug-tracker "https://github.com/yitzchak/nilmq/issues"
-  :depends-on ("closer-mop"
+  :depends-on ("bordeaux-threads"
+               "closer-mop"
                "nontrivial-gray-streams"
                "usocket")
   :components ((:module "code"
                 :components
                 ((:file "packages")
                  (:file "interface")
+                 (:file "queue")
                  (:file "stream")
                  (:file "null-client")))))
 
