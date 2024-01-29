@@ -1,6 +1,13 @@
 (in-package #:nilmq)
 
+(defgeneric poll (object)
+  (:method (object)
+    (declare (ignore object))
+    nil))
+
 (defgeneric make-socket (type))
+
+(defgeneric start-connection (socket connection))
 
 (defgeneric bind (socket endpoint))
 
@@ -49,7 +56,7 @@
 (defconstant +version-minor+ 1)
 
 (defparameter +signature+
-  #(#xff #x00 #x00 #x00 #x00 #x00 #x00 #x00 #x00 #x7f))
+  #(#xff #x00 #x00 #x00 #x00 #x00 #x00 #x00 #x01 #x7f))
 
 (defparameter +padding+
   (make-array 31 :element-type '(unsigned-byte 8) :initial-element 0))

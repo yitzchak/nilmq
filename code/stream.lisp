@@ -57,11 +57,11 @@
             initially (ecase size
                         (:uint8 (write-byte (length value) stream))
                         (:uint32 (write-uint32 (length value) stream)))
-            do (write-byte (char-code value) stream))))
+            do (write-byte (char-code ch) stream))))
 
 (defun read-vstring (stream &optional (size :uint8))
   (if (numberp size)
-      (loop with result = (make-string size
+      (loop with result = (make-array size
                                        :element-type 'standard-char
                                        :fill-pointer 0)
             with fill = t
@@ -75,7 +75,7 @@
       (loop with size = (ecase size
                           (:uint8 (read-byte stream))
                           (:uint32 (read-uint32 stream)))
-            with result = (make-string size :element-type 'standard-char)
+            with result = (make-array size :element-type 'standard-char)
             for pos from 0 below size
             finally (return result)
             do (setf (schar result pos) (code-char (read-byte stream))))))
