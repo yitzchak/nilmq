@@ -15,7 +15,8 @@
                  (:file "interface")
                  (:file "queue")
                  (:file "stream")
-                 (:file "null-client")))))
+                 (:file "commands")
+                 (:file "socket")))))
 
 (asdf:defsystem "nilmq/test"
   :description "Tests for nilmq"

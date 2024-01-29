@@ -1,8 +1,11 @@
 (defpackage #:nilmq
   (:use #:cl)
-  (:export #:connect
+  (:shadow #:identity)
+  (:export #:bind
+           #:connect
            #:handshake
            #:name
+           #:make-socket
            #:object-factory
            #:receive
            #:receive-data

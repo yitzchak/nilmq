@@ -1,5 +1,13 @@
 (in-package #:nilmq)
 
+(defgeneric make-socket (type))
+
+(defgeneric bind (socket endpoint))
+
+(defgeneric connect (socket endpoint))
+
+(defgeneric input-available-p (socket))
+
 (defgeneric shutdown (socket))
 
 (defgeneric resource (socket))
@@ -11,9 +19,9 @@
     (declare (ignore object))
     nil))
 
-(defgeneric serialize-data (socket object &optional index))
+(defgeneric serialize-data (object))
 
-(defgeneric send-data (socket object data &optional index))
+(defgeneric send-data (socket object data))
 
 (defgeneric send (socket object))
 
@@ -23,7 +31,7 @@
 
 (defgeneric (setf object-factory) (function socket name))
 
-(defgeneric receive-data (socket object size &optional index))
+(defgeneric receive-data (socket object size))
 
 (defgeneric handshake (socket))
 
