@@ -46,6 +46,14 @@
           (ash (read-byte stream) 8)
           (read-byte stream)))
 
+(defun write-uint16 (stream value)
+  (write-byte (ldb (byte 8 8) value) stream)
+  (write-byte (ldb (byte 8 0) value) stream))
+
+(defun read-uint16 (stream)
+  (logior (ash (read-byte stream) 8)
+          (read-byte stream)))
+
 (defun write-vstring (stream value &optional (size :uint8))
   (if (numberp size)
       (loop for pos from 0 below size
@@ -56,7 +64,7 @@
       (loop for ch across value
             initially (ecase size
                         (:uint8 (write-byte (length value) stream))
-                        (:uint32 (write-uint32 (length value) stream)))
+                        (:uint32 (write-uint32 stream (length value))))
             do (write-byte (char-code ch) stream))))
 
 (defun read-vstring (stream &optional (size :uint8))

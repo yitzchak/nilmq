@@ -1,12 +1,17 @@
 (in-package #:nilmq)
 
-(defclass unknown-part ()
+(defclass octet-mixin ()
   ((data :accessor data)))
 
-(defclass unknown-command ()
+(defmethod receive-data (socket (object octet-mixin) size)
+  (read-sequence (setf (data object)
+                       (make-array size :element-type '(unsigned-byte 8)))
+                 (target socket))
+  object)
+
+(defclass unknown-command (octet-mixin)
   ((name :reader name
-         :initarg :name)
-   (data :accessor data)))
+         :initarg :name)))
 
 (defclass metadata-mixin ()
   ((metadata :reader metadata
@@ -14,25 +19,26 @@
 
 (defmethod serialize-data ((object metadata-mixin))
   (let ((stream (make-instance 'binary-output-stream)))
-    #+(or)(loop for def = (closer-mop:class-slots (class-of object))
+    (loop for def in (closer-mop:class-slots (class-of object))
           for slot-name = (closer-mop:slot-definition-name def)
-          when (slot-boundp object slot-name)
-            do (write-vstring (symbol-name slot-name) stream)
-               (let ((value (slot-value value slot-name)))
+          when (and (slot-boundp object slot-name)
+                    (not (eq slot-name 'metadata)))
+            do (write-vstring stream (symbol-name slot-name))
+               (let ((value (slot-value object slot-name)))
                  (typecase value
                    (string
-                    (write-vstring value stream :uint32))
+                    (write-vstring stream value :uint32))
                    (otherwise
-                    (write-uint32 (length value) stream)
+                    (write-uint32 stream (length value))
                     (write-sequence value stream)))))
-    (loop for k being the hash-keys in (metadata object)
+    (loop for k being the hash-keys of (metadata object)
             using (hash-value value)
           do (write-vstring stream k)
              (typecase value
                (string
-                (write-vstring value stream :uint32))
+                (write-vstring stream value :uint32))
                (otherwise
-                (write-uint32 (length value) stream)
+                (write-uint32 stream (length value))
                 (write-sequence value stream))))
     (values (length (buffer stream))
             (buffer stream))))
@@ -41,20 +47,43 @@
   (write-sequence data stream))
 
 (defmethod receive-data (socket (object metadata-mixin) size)
-  (loop repeat size
-        do (read-byte (target socket)))
-  #+(or)(unless (zerop size)
-    (loop with stream = (target socket)
-          for key = (read-vstring stream)
-          for len = (read-uint32 stream)
-          for value = (make-array len :element-type '(unsigned-byte 8))
-          until (zerop size)
-          do (decf size (+ 5 (length key) len))
-             (read-sequence value stream)
-             (setf (gethash key (metadata object)) value))))
+  (prog (key len value def
+         (stream (target socket))
+         (slots (closer-mop:class-slots (class-of object))))
+   repeat
+     (unless (zerop size)
+       (setf key (read-vstring stream)
+             def (find key slots :key (lambda (def)
+                                        (symbol-name (closer-mop:slot-definition-name def)))
+                                 :test #'equalp))
+       (cond ((null def)
+              (setf len (read-uint32 stream)
+                    value (make-array len :element-type '(unsigned-byte 8)))
+              (decf size (+ 5 (length key) len))
+              (read-sequence value stream)
+              (setf (gethash key (metadata object)) value))
+             ((subtypep (closer-mop:slot-definition-type def) 'string)
+              (setf value (read-vstring stream :uint32)
+                    (slot-value object (closer-mop:slot-definition-name def)) value)
+              (decf size (+ 5 (length key) (length value))))
+             (t
+              (setf len (read-uint32 stream)
+                    value (make-array len :element-type '(unsigned-byte 8)))
+              (decf size (+ 5 (length key) len))
+              (read-sequence value stream)
+              (setf (slot-value object (closer-mop:slot-definition-name def)) value)))
+       (go repeat))))
 
 (defclass ready-command (metadata-mixin)
-  ())
+  ((identity :accessor routing-id
+               :initarg :routing-id
+               :type (vector (unsigned-byte 8) *))
+   (socket-type :accessor socket-type
+                :initarg :socket-type
+                :type string)
+   (resource :accessor resource
+             :initarg :socket-type
+             :type string)))
 
 (defmethod name ((command ready-command))
   "READY")
@@ -66,12 +95,6 @@
 (defmethod name ((command error-command))
   "ERROR")
 
-(defmethod receive-data (socket (object unknown-command) size)
-  (read-sequence (setf (data object)
-                       (make-array size :element-type '(unsigned-byte 8)))
-                 (target socket))
-  object)
-
 (defmethod serialize-data ((object error-command))
   (1+ (length (reason object))))
 
@@ -79,8 +102,53 @@
   (declare (ignore data))
   (write-vstring stream (reason object)))
 
-(defmethod receive-data (socket (object unknown-part) size)
-  (read-sequence (setf (data object)
-                       (make-array size :element-type '(unsigned-byte 8)))
-                 (target socket))
+(defclass subscribe-command (octet-mixin)
+  ())
+
+(defmethod name ((command subscribe-command))
+  "SUBSCRIBE")
+
+(defclass cancel-command (octet-mixin)
+  ())
+
+(defmethod name ((command subscribe-command))
+  "CANCEL")
+
+(defclass ping-command ()
+  ((ttl :accessor ttl
+        :initarg :ttl)
+   (context :accessor context
+            :initarg :context)))
+
+(defmethod serialize-data ((object ping-command))
+  (+ 2 (length (context object))))
+
+(defmethod send-data (stream (command ping-command) data)
+  (declare (ignore data))
+  (write-uint16 stream (ttl object))
+  (write-sequence (context stream) stream))
+
+(defmethod receive-data (socket (object ping-command) size)
+  (setf (ttl object) (read-uint16 stream)
+        (context object) (make-array (- size 2) :element-type '(unsigned-byte 8)))
+  (read-sequence (context object) stream))
+
+(defclass pong-command ()
+  ((context :accessor context
+            :initarg :context)))
+
+(defmethod serialize-data ((object pong-command))
+  (length (context object)))
+
+(defmethod send-data (stream (command pong-command) data)
+  (declare (ignore data))
+  (write-sequence (context stream) stream))
+
+(defmethod receive-data (socket (object pong-command) size)
+  (setf (context object) (make-array size :element-type '(unsigned-byte 8)))
+  (read-sequence (context object) stream))
+
+(defmethod receive-data (socket (object vector) size)
+  (declare (ignore size))
+  (read-sequence object (target socket))
   object)

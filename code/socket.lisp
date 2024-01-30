@@ -16,14 +16,12 @@
   (let ((signature (make-array 10 :element-type '(unsigned-byte 8)))
         (padding (make-array 31 :element-type '(unsigned-byte 8))))
     (read-sequence signature stream)
-    (write-greeting stream "NULL" t)
-    (push signature a)
     (multiple-value-prog1
-        (values (push (read-byte stream) a)
-                (push (read-byte stream) a)
-                (push (read-vstring stream 20) a)
-                (push (read-byte stream) a))
-      (push (read-sequence padding stream) a))))
+        (values (read-byte stream)
+                (read-byte stream)
+                (read-vstring stream 20)
+                (read-byte stream))
+      (read-sequence padding stream))))
 
 (defun parse-endpoint (endpoint)
   (multiple-value-bind (protocol address)
@@ -68,8 +66,8 @@
                   :initform (make-instance 'queue))
    (%handle :reader handle
             :initarg :handle)
-   (%identity :accessor identity
-              :initarg :identity
+   (%routing-id :accessor routing-id
+              :initarg :routing-id
               :initform nil)
    (%subscriptions :accessor subscriptions
                    :initarg :subscriptions
@@ -105,13 +103,21 @@
   ((object-factories :reader object-factories
                      :initform (let ((factories (make-hash-table :test #'equalp)))
                                  (setf (gethash "READY" factories)
-                                       (lambda (name)
-                                         (declare (ignore name))
+                                       (lambda (name size)
+                                         (declare (ignore name size))
                                          (make-instance 'ready-command))
                                        (gethash "ERROR" factories)
-                                       (lambda (name)
-                                         (declare (ignore name))
-                                         (make-instance 'error-command)))
+                                       (lambda (name size)
+                                         (declare (ignore name size))
+                                         (make-instance 'error-command))
+                                       (gethash "SUBSCRIBE" factories)
+                                       (lambda (name size)
+                                         (declare (ignore name size))
+                                         (make-instance 'subscribe-command))
+                                       (gethash "CANCEL" factories)
+                                       (lambda (name size)
+                                         (declare (ignore name size))
+                                         (make-instance 'cancel-command)))
                                  factories))
    (endpoints :reader endpoints
               :initform (make-hash-table :test #'equalp))
@@ -136,10 +142,9 @@
          (loop for endpoint being the hash-values of (endpoints socket)
                nconc (handles endpoint)))))
 
-(defun default-object-factory (name)
-  (push name a)
+(defun default-object-factory (name size)
   (if (numberp name)
-      (make-instance 'unknown-part)
+      (make-array size :element-type '(unsigned-byte 8))
       (make-instance 'unknown-command :name name)))
 
 (defmethod object-factory ((object socket) name)
@@ -199,22 +204,22 @@
 
 (defmethod start-connection (socket connection)
   (setf (object-factories connection) (object-factories socket))
-  ;(write-greeting (target connection) "NULL" t)
+  (write-greeting (target connection) "NULL" nil)
   (read-greeting (target connection))
   (handshake connection)
   (update-wait-list socket))
 
 (defmethod start-connection :after ((socket router-socket) connection)
-  (setf (gethash (identity connection) (connections socket))
+  (setf (gethash (routing-id connection) (connections socket))
         connection))
 
 (defmethod poll :after ((socket router-socket))
   (loop for connection being the hash-values of (connections socket)
         do (poll connection)
-        do (loop with identity = (identity connection)
+        do (loop with routing-id = (routing-id connection)
                  while (input-available-p connection)
                  do (enqueue (input-queue socket)
-                             (cons identity (dequeue (input-queue connection)))))))
+                             (cons routing-id (dequeue (input-queue connection)))))))
 
 (defmethod make-socket ((type (eql :router)))
   (let ((socket (make-instance 'router-socket)))
@@ -228,7 +233,7 @@
   (let ((connection (gethash (car message) (connections socket))))
     (if connection
         (send connection (cdr message))
-        (error "Unable to find connection for ~s identity" (car message)))))
+        (error "Unable to find connection for ~s routing-id" (car message)))))
 
 (defclass pub-socket (nonblocking-socket)
   ((%connections :accessor connections
@@ -292,16 +297,17 @@
                          (read-uint64 stream)
                          (read-byte stream)))
                (name (read-vstring stream))
-               (command (funcall (object-factory socket name) name)))
-          (receive-data socket command (- size (length name) 1))
+               (data-size (- size (length name) 1))
+               (command (funcall (object-factory socket name) name data-size)))
+          (receive-data socket command data-size)
           command)
         (loop for index from 0
-              for part = (funcall (object-factory socket index) index)
-              collect part into message
-              do (receive-data socket part
-                               (if (logbitp +long-bit+ flags)
+              for size = (if (logbitp +long-bit+ flags)
                                    (read-uint64 stream)
-                                   (read-byte stream)))
+                                   (read-byte stream))
+              for part = (funcall (object-factory socket index) index size)
+              collect part into message
+              do (receive-data socket part size)
               unless (logbitp +more-bit+ flags)
                 return message
               do (setf flags (read-byte stream))))))
@@ -310,6 +316,7 @@
   (send socket (make-instance 'ready-command))
   (let ((response (receive socket)))
     (check-type response ready-command)
-    (let ((identity (gethash "identity" (metadata response))))
-      (when identity
-        (setf (identity socket) identity)))))
+    (push response a)
+    (let ((routing-id (routing-id response)))
+      (when routing-id
+        (setf (routing-id socket) routing-id)))))
