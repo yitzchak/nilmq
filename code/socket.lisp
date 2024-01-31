@@ -39,7 +39,9 @@
            (error "Unknown protocol ~a" protocol)))))
 
 (defclass endpoint ()
-  ((%address :reader address
+  ((%parent :accessor parent
+            :initarg :parent)
+   (%address :reader address
              :initarg :address)
    (%handle :reader handle
             :initarg :handle)))
@@ -50,7 +52,9 @@
 
 (defmethod poll ((server server))
   (when (usocket:socket-state (handle server))
+    (push (usocket:socket-state (handle server)) a)
     (let ((connection (make-instance 'connection
+                                     :parent (parent server)
                                      :handle (usocket:socket-accept (handle server)))))
       (push connection (connections server))
       connection)))
@@ -60,8 +64,8 @@
                 :initarg :connection)))
 
 (defclass connection ()
-  ((%input-queue :reader input-queue
-                 :initform (make-instance 'queue))
+  ((%parent :accessor parent
+            :initarg :parent)
    (%output-queue :reader output-queue
                   :initform (make-instance 'queue))
    (%handle :reader handle
@@ -71,26 +75,30 @@
               :initform nil)
    (%subscriptions :accessor subscriptions
                    :initarg :subscriptions
-                   :initform nil)
-   (object-factories :accessor object-factories
-                     :initarg :factories)))
+                   :initform nil)))
 
 (defmethod input-available-p ((connection connection))
   (not (queue-empty-p (input-queue connection))))
 
 (defmethod object-factory ((object connection) name)
-  (gethash name (object-factories object) #'default-object-factory))
+  (object-factory (parent object) name))
 
 (defmethod send ((connection connection) object)
   (enqueue (output-queue connection) object))
 
+(defmethod process (socket (connection connection) (object subscribe-command))
+  (declare (ignore socket))
+  (push (data object) (subscriptions connection)))
+
+(defmethod process (socket (connection connection) (object cancel-command))
+  (declare (ignore socket))
+  (setf (subscriptions connection)
+        (delete (data object) (subscriptions connection)
+                :test #'equalp)))
+
 (defmethod poll ((connection connection))
   (when (usocket:socket-state (handle connection))
-    (let ((object (receive connection)))
-      (cond ((consp object)
-             (enqueue (input-queue connection) object))
-            (t
-             (error "wibble")))))
+    (process (parent connection) connection (receive connection)))
   (unless (queue-empty-p (output-queue connection))
     (send (target connection)
           (dequeue (output-queue connection))))
@@ -122,7 +130,10 @@
    (endpoints :reader endpoints
               :initform (make-hash-table :test #'equalp))
    (wait-list :accessor wait-list
-             :initform nil)))
+              :initform nil)
+   (routing-id :accessor routing-id
+               :initarg :routing-id
+               :initform nil)))
 
 (defgeneric handles (object)
   (:method (object)
@@ -161,7 +172,7 @@
            (endpoint (format nil "tcp://~a:~a~@[/~a~]"
                              host (usocket:get-local-port handle) resource)))
       (setf (gethash endpoint (endpoints socket))
-            (make-instance 'server :handle handle :address endpoint))
+            (make-instance 'server :handle handle :address endpoint :parent socket))
       (update-wait-list socket)
       endpoint)))
 
@@ -173,8 +184,8 @@
            (endpoint (format nil "tcp://~a:~a~@[/~a~]"
                              host (usocket:get-local-port handle) resource)))
       (setf (gethash endpoint (endpoints socket))
-            (make-instance 'client :handle handle :address endpoint)
-            (connection endpoint) (make-instance 'connection :handle handle))
+            (make-instance 'client :handle handle :address endpoint :parent socket)
+            (connection endpoint) (make-instance 'connection :handle handle :parent socket))
       (start-connection socket (connection endpoint))
       endpoint)))
 
@@ -190,6 +201,7 @@
 (defclass nonblocking-socket (socket)
   ((thread :accessor thread)
    (input-queue :reader input-queue
+                :initarg :input-queue
                 :initform (make-instance 'queue))))
 
 (defmethod receive ((socket nonblocking-socket))
@@ -198,64 +210,11 @@
 (defmethod input-available-p ((socket nonblocking-socket))
   (not (queue-empty-p (input-queue socket))))
 
-(defclass router-socket (nonblocking-socket)
-  ((%connections :reader connections
-                 :initform (make-hash-table :test #'equalp))))
-
 (defmethod start-connection (socket connection)
-  (setf (object-factories connection) (object-factories socket))
   (write-greeting (target connection) "NULL" nil)
   (read-greeting (target connection))
   (handshake connection)
   (update-wait-list socket))
-
-(defmethod start-connection :after ((socket router-socket) connection)
-  (setf (gethash (routing-id connection) (connections socket))
-        connection))
-
-(defmethod poll :after ((socket router-socket))
-  (loop for connection being the hash-values of (connections socket)
-        do (poll connection)
-        do (loop with routing-id = (routing-id connection)
-                 while (input-available-p connection)
-                 do (enqueue (input-queue socket)
-                             (cons routing-id (dequeue (input-queue connection)))))))
-
-(defmethod make-socket ((type (eql :router)))
-  (let ((socket (make-instance 'router-socket)))
-    (setf (thread socket)
-          (bordeaux-threads:make-thread
-           (lambda ()
-             (loop (poll socket)))))
-    socket))
-
-(defmethod send ((socket router-socket) (message cons))
-  (let ((connection (gethash (car message) (connections socket))))
-    (if connection
-        (send connection (cdr message))
-        (error "Unable to find connection for ~s routing-id" (car message)))))
-
-(defclass pub-socket (nonblocking-socket)
-  ((%connections :accessor connections
-                 :initform nil)))
-
-(defmethod start-connection :after ((socket pub-socket) connection)
-  (push connection (connections socket)))
-
-(defmethod make-socket ((type (eql :pub)))
-  (let ((socket (make-instance 'pub-socket)))
-    (setf (thread socket)
-          (bordeaux-threads:make-thread
-           (lambda ()
-             (loop (poll socket)))))
-    socket))
-
-(defmethod send ((socket pub-socket) (message cons))
-  (loop for connection in (connections socket)
-        when (some (lambda (sub)
-                (not (mismatch sub (car message) :end1 (length sub))))
-                   (subscriptions connection))
-          do (send connection message)))
 
 (defmethod send (stream command)
   (let ((name (name command)))
@@ -313,7 +272,9 @@
               do (setf flags (read-byte stream))))))
 
 (defmethod handshake ((socket connection))
-  (send socket (make-instance 'ready-command))
+  (send socket (make-instance 'ready-command
+                              :routing-id (routing-id (parent socket))
+                              :socket-type (socket-type (parent socket))))
   (let ((response (receive socket)))
     (check-type response ready-command)
     (push response a)

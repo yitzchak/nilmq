@@ -76,8 +76,9 @@
 
 (defclass ready-command (metadata-mixin)
   ((identity :accessor routing-id
-               :initarg :routing-id
-               :type (vector (unsigned-byte 8) *))
+             :initarg :routing-id
+             :initform nil
+             :type (vector (unsigned-byte 8) *))
    (socket-type :accessor socket-type
                 :initarg :socket-type
                 :type string)
@@ -133,6 +134,10 @@
         (context object) (make-array (- size 2) :element-type '(unsigned-byte 8)))
   (read-sequence (context object) stream))
 
+(defmethod process (socket connection (object ping-command))
+  (declare (ignore socket))
+  (send connection (make-instance 'pong-command :context (context ping-command))))
+
 (defclass pong-command ()
   ((context :accessor context
             :initarg :context)))
@@ -152,3 +157,17 @@
   (declare (ignore size))
   (read-sequence object (target socket))
   object)
+
+(defmethod serialize-data ((object string))
+  (length object))
+
+(defmethod serialize-data ((object vector))
+  (length object))
+
+(defmethod send-data (stream (object string) data)
+  (declare (ignore data))
+  (write-vstring stream object nil))
+
+(defmethod send-data (stream (object vector) data)
+  (declare (ignore data))
+  (write-sequence object stream))

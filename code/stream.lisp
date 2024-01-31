@@ -63,6 +63,7 @@
                            stream))
       (loop for ch across value
             initially (ecase size
+                        ((nil))
                         (:uint8 (write-byte (length value) stream))
                         (:uint32 (write-uint32 stream (length value))))
             do (write-byte (char-code ch) stream))))

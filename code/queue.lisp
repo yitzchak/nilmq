@@ -1,5 +1,11 @@
 (in-package #:nilmq)
 
+(defgeneric enqueue (queue item))
+
+(defgeneric dequeue (queue))
+
+(defgeneric queue-empty-p (queue))
+
 (defclass queue ()
   ((head :accessor head
          :initform nil
@@ -12,7 +18,7 @@
    (not-empty-condition :accessor not-empty-condition
                         :initform (bordeaux-threads:make-condition-variable))))
 
-(defun enqueue (queue item)
+(defmethod enqueue ((queue queue) item)
   (with-accessors ((head head)
                    (tail tail)
                    (access-lock access-lock)
@@ -25,9 +31,10 @@
                (rplacd old-tail tail))
               (t
                (setf head tail)
-               (bordeaux-threads:condition-notify not-empty-condition)))))))
+               (bordeaux-threads:condition-notify not-empty-condition))))))
+  item)
 
-(defun dequeue (queue)
+(defmethod dequeue ((queue queue))
   (with-accessors ((head head)
                    (tail tail)
                    (access-lock access-lock)
@@ -43,9 +50,21 @@
          (bordeaux-threads:condition-wait not-empty-condition access-lock)
          (go check)))))
 
-(defun queue-empty-p (queue)
+(defmethod queue-empty-p ((queue queue))
   (with-accessors ((head head)
                    (access-lock access-lock))
       queue
     (bordeaux-threads:with-lock-held (access-lock)
       (null head))))
+
+(defclass null-queue ()
+  ())
+
+(defmethod enqueue ((queue null-queue) item)
+  item)
+
+(defmethod dequeue ((queue null-queue))
+  nil)
+
+(defmethod queue-empty-p ((queue null-queue))
+  t)

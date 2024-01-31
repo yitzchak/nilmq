@@ -23,6 +23,8 @@
 
 (defgeneric target (socket))
 
+(defgeneric socket-type (socket))
+
 (defgeneric name (object)
   (:method (object)
     (declare (ignore object))
@@ -43,6 +45,10 @@
 (defgeneric receive-data (socket object size))
 
 (defgeneric handshake (socket))
+
+(defgeneric process (socket connection object)
+  (:method (socket connection object)
+    (declare (ignore socket connection object))))
 
 (defconstant +more-bit+ 0)
 

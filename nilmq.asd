@@ -16,7 +16,9 @@
                  (:file "queue")
                  (:file "stream")
                  (:file "commands")
-                 (:file "socket")))))
+                 (:file "socket")
+                 (:file "reqrep")
+                 (:file "pubsub")))))
 
 (asdf:defsystem "nilmq/test"
   :description "Tests for nilmq"
