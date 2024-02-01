@@ -1,10 +1,10 @@
 (in-package #:nilmq)
 
 (defclass rep-socket (nonblocking-socket)
-  ((%connections :accessor connections
-                 :initform nil)
-   (address-queue :accessor address-queue
-                  :initform (make-instance 'queue))))
+  ((%output-queue :accessor output-queue
+                  :initform (make-instance 'queue))
+   (%connections :accessor connections
+                 :initform nil)))
 
 (defmethod socket-type ((socket rep-socket))
   "REP")
@@ -14,7 +14,8 @@
     (setf (thread socket)
           (bordeaux-threads:make-thread
            (lambda ()
-             (loop (poll socket)))))
+             (loop (poll socket)
+                   (sleep 0.1)))))
     socket))
 
 (defmethod start-connection :after ((socket rep-socket) connection)
@@ -25,16 +26,15 @@
 
 (defmethod process ((socket rep-socket) (connection connection) (object cons))
   (let ((delimiter (member-if (lambda (x) (zerop (length x))) object)))
-    (enqueue (address-queue socket) (cons connection delimiter))
     (enqueue (input-queue socket) (cdr delimiter))
-    (setf (cdr delimiter) nil)))
+    (setf (cdr delimiter) (dequeue (output-queue socket)))
+    (send connection object)))
 
 (defmethod die :after ((socket rep-socket) connection)
   (setf (connections socket) (delete connection (connections socket))))
 
 (defmethod send ((socket rep-socket) (message cons))
-  (let ((last (dequeue (address-queue socket))))
-    (send (car last) (nconc (cdr last) message))))
+  (enqueue (output-queue socket) message))
 
 (defclass router-socket (nonblocking-socket)
   ((%connections :reader connections
