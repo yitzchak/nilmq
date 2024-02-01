@@ -77,9 +77,6 @@
                    :initarg :subscriptions
                    :initform nil)))
 
-(defmethod input-available-p ((connection connection))
-  (not (queue-empty-p (input-queue connection))))
-
 (defmethod object-factory ((object connection) name)
   (object-factory (parent object) name))
 
@@ -97,11 +94,16 @@
                 :test #'equalp)))
 
 (defmethod poll ((connection connection))
-  (when (usocket:socket-state (handle connection))
-    (process (parent connection) connection (receive connection)))
-  (unless (queue-empty-p (output-queue connection))
-    (send (target connection)
-          (dequeue (output-queue connection))))
+  (handler-case
+      (progn (when (and ;(usocket:socket-state (handle connection))
+                    (listen (target connection)))
+               (process (parent connection) connection (receive connection)))
+             (unless (queue-empty-p (output-queue connection))
+               (send (target connection)
+                     (dequeue (output-queue connection)))))
+    (sb-int:broken-pipe (condition)
+      (declare (ignore condition))
+      (die (parent connection) connection)))
   nil)
 
 (defmethod target ((object connection))
@@ -135,17 +137,29 @@
                :initarg :routing-id
                :initform nil)))
 
+(defmethod die ((socket socket) connection)
+  (loop for k being the hash-keys of (endpoints socket)
+        using (hash-value v)
+        do (cond ((eq v connection)
+                  (remhash k (endpoints socket)))
+                 ((typep v 'server)
+                  (setf (connections v) (delete connection (connections v)))))))
+
+(defmethod shutdown ((object socket))
+  (loop for endpoint being the hash-values of (endpoints object)
+        do (usocket:socket-close (handle endpoint))))
+
 (defgeneric handles (object)
   (:method (object)
     (declare (ignore object))
     nil))
 
 (defmethod handles ((client client))
-  (list (handle client)))
+  nil);(list (handle client)))
 
 (defmethod handles ((server server))
-  (list* (handle server)
-         (mapcar #'handle (connections server))))
+  (list (handle server)
+         #+(or)(mapcar #'handle (connections server))))
 
 (defun update-wait-list (socket)
   (setf (wait-list socket)
@@ -228,7 +242,7 @@
                (write-byte (logior (ash 1 +command-bit+)
                                    (ash 1 +long-bit+))
                            stream)
-               (write-uint64 size stream)))
+               (write-uint64 stream size)))
         (write-vstring stream name)
         (send-data stream command data))))
   (finish-output stream))
@@ -236,7 +250,6 @@
 (defmethod send (stream (message cons))
   (loop for (part . rest) on message
         for (size data) = (multiple-value-list (serialize-data part))
-        finally (finish-output stream)
         if (< size 256)
           do (write-byte (if rest (ash 1 +more-bit+) 0) stream)
              (write-byte size stream)
@@ -244,13 +257,13 @@
           do (write-byte (logior (ash 1 +long-bit+)
                                  (if rest (ash 1 +more-bit+) 0))
                          stream)
-             (write-uint64 size stream)
-        do (send-data stream part data)))
+             (write-uint64 stream size)
+        do (send-data stream part data)
+           (finish-output stream)))
 
 (defmethod receive (socket)
   (let* ((stream (target socket))
          (flags (read-byte stream)))
-    (push flags a)
     (if (logbitp +command-bit+ flags)
         (let* ((size (if (logbitp +long-bit+ flags)
                          (read-uint64 stream)

@@ -8,6 +8,9 @@
 (defmethod socket-type ((socket pub-socket))
   "PUB")
 
+(defmethod die :after ((socket pub-socket) connection)
+  (setf (connections socket) (delete connection (connections socket))))
+
 (defmethod start-connection :after ((socket pub-socket) connection)
   (push connection (connections socket)))
 
@@ -21,9 +24,11 @@
 
 (defmethod send ((socket pub-socket) (message cons))
   (loop for connection in (connections socket)
-        when (some (lambda (sub)
-                (not (mismatch sub (car message) :end1 (length sub))))
-                   (subscriptions connection))
+        when (or (null (subscriptions connection))
+                 (some (lambda (sub)
+                         (or (zerop (length sub))
+                             (not (mismatch sub (car message) :end1 (length sub)))))
+                       (subscriptions connection)))
           do (send connection message)))
 
 (defmethod poll :after ((socket pub-socket))

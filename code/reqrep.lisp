@@ -1,5 +1,41 @@
 (in-package #:nilmq)
 
+(defclass rep-socket (nonblocking-socket)
+  ((%connections :accessor connections
+                 :initform nil)
+   (address-queue :accessor address-queue
+                  :initform (make-instance 'queue))))
+
+(defmethod socket-type ((socket rep-socket))
+  "REP")
+
+(defmethod make-socket ((type (eql :rep)))
+  (let ((socket (make-instance 'rep-socket)))
+    (setf (thread socket)
+          (bordeaux-threads:make-thread
+           (lambda ()
+             (loop (poll socket)))))
+    socket))
+
+(defmethod start-connection :after ((socket rep-socket) connection)
+  (push connection (connections socket)))
+
+(defmethod poll :after ((socket rep-socket))
+  (mapc #'poll (connections socket)))
+
+(defmethod process ((socket rep-socket) (connection connection) (object cons))
+  (let ((delimiter (member-if (lambda (x) (zerop (length x))) object)))
+    (enqueue (address-queue socket) (cons connection delimiter))
+    (enqueue (input-queue socket) (cdr delimiter))
+    (setf (cdr delimiter) nil)))
+
+(defmethod die :after ((socket rep-socket) connection)
+  (setf (connections socket) (delete connection (connections socket))))
+
+(defmethod send ((socket rep-socket) (message cons))
+  (let ((last (dequeue (address-queue socket))))
+    (send (car last) (nconc (cdr last) message))))
+
 (defclass router-socket (nonblocking-socket)
   ((%connections :reader connections
                  :initform (make-hash-table :test #'equalp))))
@@ -7,17 +43,16 @@
 (defmethod socket-type ((socket router-socket))
   "ROUTER")
 
+(defmethod die :after ((socket router-socket) connection)
+  (remhash (routing-id connection) (connections socket)))
+
 (defmethod start-connection :after ((socket router-socket) connection)
   (setf (gethash (routing-id connection) (connections socket))
         connection))
 
 (defmethod poll :after ((socket router-socket))
   (loop for connection being the hash-values of (connections socket)
-        do (poll connection)
-        do (loop with routing-id = (routing-id connection)
-                 while (input-available-p connection)
-                 do (enqueue (input-queue socket)
-                             (cons routing-id (dequeue (input-queue connection)))))))
+        do (poll connection)))
 
 (defmethod make-socket ((type (eql :router)))
   (let ((socket (make-instance 'router-socket)))

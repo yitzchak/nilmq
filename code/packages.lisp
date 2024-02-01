@@ -5,6 +5,7 @@
            #:connect
            #:error-command
            #:handshake
+           #:input-available-p
            #:make-socket
            #:name
            #:object-factory

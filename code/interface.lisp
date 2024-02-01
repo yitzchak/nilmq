@@ -5,6 +5,8 @@
     (declare (ignore object))
     nil))
 
+(defgeneric die (socket connection))
+
 (defgeneric routing-id (object))
 
 (defgeneric make-socket (type))
