@@ -11,11 +11,9 @@
 
 (defmethod make-socket ((type (eql :rep)) &key (context *context*))
   (let ((socket (make-instance 'rep-socket :context context)))
-    (setf (thread socket)
-          (bordeaux-threads:make-thread
-           (lambda ()
-             (loop (poll socket)
-                   (sleep 0.1)))))
+    (enqueue-task socket (lambda ()
+                           (poll socket)
+                           t))
     socket))
 
 (defmethod start-connection :after ((socket rep-socket) connection)
@@ -88,10 +86,9 @@
 
 (defmethod make-socket ((type (eql :dealer)) &key (context *context*))
   (let ((socket (make-instance 'dealer-socket :context context)))
-    (setf (thread socket)
-          (bordeaux-threads:make-thread
-           (lambda ()
-             (loop (poll socket)))))
+    (enqueue-task socket (lambda ()
+                           (poll socket)
+                           t))
     socket))
 
 (defmethod send ((socket dealer-socket) (message cons))

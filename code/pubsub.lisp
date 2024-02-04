@@ -16,10 +16,9 @@
 
 (defmethod make-socket ((type (eql :pub)) &key (context *context*))
   (let ((socket (make-instance 'pub-socket :context context)))
-    (setf (thread socket)
-          (bordeaux-threads:make-thread
-           (lambda ()
-             (loop (poll socket)))))
+    (enqueue-task socket (lambda ()
+                           (poll socket)
+                           t))
     socket))
 
 (defmethod send ((socket pub-socket) (message cons))

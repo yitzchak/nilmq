@@ -2,6 +2,8 @@
 
 (defgeneric context (instance))
 
+(defgeneric enqueue-task (instance func))
+
 (defgeneric poll (object)
   (:method (object)
     (declare (ignore object))
