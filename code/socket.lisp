@@ -109,7 +109,7 @@
 (defmethod target ((object connection))
   (usocket:socket-stream (handle object)))
 
-(defclass socket ()
+(defclass socket (context-mixin)
   ((object-factories :reader object-factories
                      :initform (let ((factories (make-hash-table :test #'equalp)))
                                  (setf (gethash "READY" factories)

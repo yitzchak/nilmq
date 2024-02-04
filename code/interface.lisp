@@ -1,5 +1,7 @@
 (in-package #:nilmq)
 
+(defgeneric context (instance))
+
 (defgeneric poll (object)
   (:method (object)
     (declare (ignore object))
@@ -9,7 +11,7 @@
 
 (defgeneric routing-id (object))
 
-(defgeneric make-socket (type))
+(defgeneric make-socket (type &key context))
 
 (defgeneric start-connection (socket connection))
 

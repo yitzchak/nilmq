@@ -15,6 +15,7 @@
                  (:file "interface")
                  (:file "queue")
                  (:file "stream")
+                 (:file "context")
                  (:file "commands")
                  (:file "socket")
                  (:file "reqrep")

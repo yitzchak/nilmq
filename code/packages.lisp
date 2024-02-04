@@ -6,6 +6,7 @@
            #:error-command
            #:handshake
            #:input-available-p
+           #:make-context
            #:make-socket
            #:name
            #:object-factory

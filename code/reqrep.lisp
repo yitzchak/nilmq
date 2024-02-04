@@ -9,8 +9,8 @@
 (defmethod socket-type ((socket rep-socket))
   "REP")
 
-(defmethod make-socket ((type (eql :rep)))
-  (let ((socket (make-instance 'rep-socket)))
+(defmethod make-socket ((type (eql :rep)) &key (context *context*))
+  (let ((socket (make-instance 'rep-socket :context context)))
     (setf (thread socket)
           (bordeaux-threads:make-thread
            (lambda ()
@@ -28,7 +28,7 @@
   (let ((delimiter (member-if (lambda (x) (zerop (length x))) object)))
     (enqueue (input-queue socket) (cdr delimiter))
     (setf (cdr delimiter) (dequeue (output-queue socket)))
-    (send connection object)))
+    (send (target connection) object)))
 
 (defmethod die :after ((socket rep-socket) connection)
   (setf (connections socket) (delete connection (connections socket))))
@@ -54,8 +54,8 @@
   (loop for connection being the hash-values of (connections socket)
         do (poll connection)))
 
-(defmethod make-socket ((type (eql :router)))
-  (let ((socket (make-instance 'router-socket)))
+(defmethod make-socket ((type (eql :router)) &key (context *context*))
+  (let ((socket (make-instance 'router-socket :context context)))
     (setf (thread socket)
           (bordeaux-threads:make-thread
            (lambda ()
@@ -86,8 +86,8 @@
 (defmethod poll :after ((socket dealer-socket))
   (mapc #'poll (connections socket)))
 
-(defmethod make-socket ((type (eql :dealer)))
-  (let ((socket (make-instance 'dealer-socket)))
+(defmethod make-socket ((type (eql :dealer)) &key (context *context*))
+  (let ((socket (make-instance 'dealer-socket :context context)))
     (setf (thread socket)
           (bordeaux-threads:make-thread
            (lambda ()

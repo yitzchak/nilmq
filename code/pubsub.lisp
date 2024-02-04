@@ -14,8 +14,8 @@
 (defmethod start-connection :after ((socket pub-socket) connection)
   (push connection (connections socket)))
 
-(defmethod make-socket ((type (eql :pub)))
-  (let ((socket (make-instance 'pub-socket)))
+(defmethod make-socket ((type (eql :pub)) &key (context *context*))
+  (let ((socket (make-instance 'pub-socket :context context)))
     (setf (thread socket)
           (bordeaux-threads:make-thread
            (lambda ()
@@ -42,8 +42,8 @@
 (defmethod socket-type ((socket pub-socket))
   "XPUB")
 
-(defmethod make-socket ((type (eql :xpub)))
-  (let ((socket (make-instance 'xpub-socket)))
+(defmethod make-socket ((type (eql :xpub)) &key (context *context*))
+  (let ((socket (make-instance 'xpub-socket :context context)))
     (setf (thread socket)
           (bordeaux-threads:make-thread
            (lambda ()
