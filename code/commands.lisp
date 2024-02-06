@@ -134,9 +134,9 @@
         (context object) (make-array (- size 2) :element-type '(unsigned-byte 8)))
   (read-sequence (context object) stream))
 
-(defmethod process (socket connection (object ping-command))
+(defmethod process (socket peer (object ping-command))
   (declare (ignore socket))
-  (send connection (make-instance 'pong-command :context (context ping-command))))
+  (send peer (make-instance 'pong-command :context (context ping-command))))
 
 (defclass pong-command ()
   ((context :accessor context

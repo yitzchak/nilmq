@@ -4,18 +4,24 @@
 
 (defgeneric enqueue-task (instance func))
 
+(defgeneric add-peer (self peer))
+
+(defgeneric remove-peer (self peer))
+
+(defgeneric find-peer (self &optional id))
+
 (defgeneric poll (object)
   (:method (object)
     (declare (ignore object))
     nil))
 
-(defgeneric die (socket connection))
+(defgeneric die (socket peer))
 
 (defgeneric routing-id (object))
 
 (defgeneric make-socket (type &key context))
 
-(defgeneric start-connection (socket connection))
+(defgeneric start-peer (socket peer))
 
 (defgeneric bind (socket endpoint))
 
@@ -52,9 +58,9 @@
 
 (defgeneric handshake (socket))
 
-(defgeneric process (socket connection object)
-  (:method (socket connection object)
-    (declare (ignore socket connection object))))
+(defgeneric process (socket peer object)
+  (:method (socket peer object)
+    (declare (ignore socket peer object))))
 
 (defconstant +more-bit+ 0)
 

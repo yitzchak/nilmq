@@ -10,8 +10,6 @@
   (finish-output stream)
   nil)
 
-(defvar a nil)
-
 (defun read-greeting (stream)
   (let ((signature (make-array 10 :element-type '(unsigned-byte 8)))
         (padding (make-array 31 :element-type '(unsigned-byte 8))))
@@ -47,103 +45,85 @@
             :initarg :handle)))
 
 (defclass server (endpoint)
-  ((%connections :accessor connections
-                 :initform nil)))
+  ((%peers :accessor peers
+           :initform nil)))
 
 (defmethod poll ((server server))
   (when (usocket:socket-state (handle server))
-    (push (usocket:socket-state (handle server)) a)
-    (let ((connection (make-instance 'connection
-                                     :parent (parent server)
-                                     :handle (usocket:socket-accept (handle server)))))
-      (push connection (connections server))
-      connection)))
+    (let ((peer (make-instance 'peer
+                               :parent (parent server)
+                               :handle (usocket:socket-accept (handle server)))))
+      (push peer (peers server))
+      peer)))
 
 (defclass client (endpoint)
-  ((%connection :accessor connection
-                :initarg :connection)))
+  ((%peer :accessor peer
+          :initarg :peer)))
 
-(defclass connection ()
+(defclass peer ()
   ((%parent :accessor parent
             :initarg :parent)
-   (%output-queue :reader output-queue
-                  :initform (make-instance 'queue))
    (%handle :reader handle
             :initarg :handle)
    (%routing-id :accessor routing-id
-              :initarg :routing-id
-              :initform nil)
+                :initarg :routing-id
+                :initform nil)
    (%subscriptions :accessor subscriptions
                    :initarg :subscriptions
                    :initform nil)))
 
-(defmethod object-factory ((object connection) name)
-  (object-factory (parent object) name))
+(defmethod context ((object peer))
+  (context (parent object)))
 
-(defmethod send ((connection connection) object)
-  (enqueue (output-queue connection) object))
+(defmethod send ((peer peer) object)
+  (enqueue-task (parent peer)
+                (lambda ()
+                  (send (target peer) object)
+                  nil)))
 
-(defmethod process (socket (connection connection) (object subscribe-command))
+(defmethod process (socket (peer peer) (object subscribe-command))
   (declare (ignore socket))
-  (push (data object) (subscriptions connection)))
+  (push (data object) (subscriptions peer)))
 
-(defmethod process (socket (connection connection) (object cancel-command))
+(defmethod process (socket (peer peer) (object cancel-command))
   (declare (ignore socket))
-  (setf (subscriptions connection)
-        (delete (data object) (subscriptions connection)
+  (setf (subscriptions peer)
+        (delete (data object) (subscriptions peer)
                 :test #'equalp)))
 
-(defmethod poll ((connection connection))
+(defmethod poll ((peer peer))
   (handler-case
-      (progn (when (and ;(usocket:socket-state (handle connection))
-                    (listen (target connection)))
-               (process (parent connection) connection (receive connection)))
-             (unless (queue-empty-p (output-queue connection))
-               (send (target connection)
-                     (dequeue (output-queue connection)))))
+      (when (listen (target peer))
+        (process (parent peer) peer (receive peer)))
     (sb-int:broken-pipe (condition)
       (declare (ignore condition))
-      (die (parent connection) connection)))
+      (die (parent peer) peer)))
   nil)
 
-(defmethod target ((object connection))
+(defmethod target ((object peer))
   (usocket:socket-stream (handle object)))
 
 (defclass socket (context-mixin)
-  ((object-factories :reader object-factories
-                     :initform (let ((factories (make-hash-table :test #'equalp)))
-                                 (setf (gethash "READY" factories)
-                                       (lambda (name size)
-                                         (declare (ignore name size))
-                                         (make-instance 'ready-command))
-                                       (gethash "ERROR" factories)
-                                       (lambda (name size)
-                                         (declare (ignore name size))
-                                         (make-instance 'error-command))
-                                       (gethash "SUBSCRIBE" factories)
-                                       (lambda (name size)
-                                         (declare (ignore name size))
-                                         (make-instance 'subscribe-command))
-                                       (gethash "CANCEL" factories)
-                                       (lambda (name size)
-                                         (declare (ignore name size))
-                                         (make-instance 'cancel-command)))
-                                 factories))
-   (endpoints :reader endpoints
+  ((endpoints :reader endpoints
               :initform (make-hash-table :test #'equalp))
    (wait-list :accessor wait-list
               :initform nil)
    (routing-id :accessor routing-id
                :initarg :routing-id
-               :initform nil)))
+               :initform nil)
+   (input-queue :reader input-queue
+                :initarg :input-queue
+                :initform (make-instance 'queue))
+   (access-lock :accessor access-lock
+                :initform (bt2:make-lock))))
 
-(defmethod die ((socket socket) connection)
+(defmethod die ((socket socket) peer)
   (loop for k being the hash-keys of (endpoints socket)
-        using (hash-value v)
-        do (cond ((eq v connection)
+          using (hash-value v)
+        do (cond ((eq v peer)
                   (remhash k (endpoints socket)))
                  ((typep v 'server)
-                  (setf (connections v) (delete connection (connections v)))))))
+                  (setf (peers v) (delete peer (peers v)))))))
 
 (defmethod shutdown ((object socket))
   (loop for endpoint being the hash-values of (endpoints object)
@@ -159,7 +139,7 @@
 
 (defmethod handles ((server server))
   (list (handle server)
-         #+(or)(mapcar #'handle (connections server))))
+        #+(or)(mapcar #'handle (peers server))))
 
 (defun update-wait-list (socket)
   (setf (wait-list socket)
@@ -167,22 +147,13 @@
          (loop for endpoint being the hash-values of (endpoints socket)
                nconc (handles endpoint)))))
 
-(defun default-object-factory (name size)
-  (if (numberp name)
-      (make-array size :element-type '(unsigned-byte 8))
-      (make-instance 'unknown-command :name name)))
-
-(defmethod object-factory ((object socket) name)
-  (gethash name (object-factories object) #'default-object-factory))
-
-(defmethod (setf object-factory) (function (object socket) name)
-  (setf (gethash name (object-factories object)) function))
-
 (defmethod bind ((socket socket) endpoint)
   (multiple-value-bind (protocol host port resource)
       (parse-endpoint endpoint)
     (declare (ignore protocol))
-    (let* ((handle (usocket:socket-listen host port :element-type '(unsigned-byte 8)))
+    (let* ((handle (usocket:socket-listen host port
+                                          :element-type '(unsigned-byte 8)
+                                          :reuse-address t))
            (endpoint (format nil "tcp://~a:~a~@[/~a~]"
                              host (usocket:get-local-port handle) resource)))
       (setf (gethash endpoint (endpoints socket))
@@ -199,8 +170,8 @@
                              host (usocket:get-local-port handle) resource)))
       (setf (gethash endpoint (endpoints socket))
             (make-instance 'client :handle handle :address endpoint :parent socket)
-            (connection endpoint) (make-instance 'connection :handle handle :parent socket))
-      (start-connection socket (connection endpoint))
+            (peer endpoint) (make-instance 'peer :handle handle :parent socket))
+      (start-peer socket (peer endpoint))
       endpoint)))
 
 (defmethod poll ((socket socket))
@@ -208,26 +179,92 @@
                           :ready-only t
                           :timeout .05)
   (loop for endpoint being the hash-value of (endpoints socket)
-        for connection = (poll endpoint)
-        when connection
-          do (start-connection socket connection)))
+        for peer = (poll endpoint)
+        when peer
+          do (start-peer socket peer)))
 
-(defclass nonblocking-socket (socket)
-  ((thread :accessor thread)
-   (input-queue :reader input-queue
-                :initarg :input-queue
-                :initform (make-instance 'queue))))
+(defmethod add-peer :around ((socket socket) peer)
+  (declare (ignore peer))
+  (bt2:with-lock-held ((access-lock socket))
+    (call-next-method)))
 
-(defmethod receive ((socket nonblocking-socket))
+(defmethod remove-peer :around ((socket socket) peer)
+  (declare (ignore peer))
+  (bt2:with-lock-held ((access-lock socket))
+    (call-next-method)))
+
+(defclass round-robin-socket (socket)
+  ((%peers :accessor peers
+           :initform nil)))
+
+(defmethod add-peer ((socket round-robin-socket) peer)
+  (with-accessors ((peers peers))
+      socket
+    (if peers
+        (setf (cdr peers) (cons peer (cddr peers)))
+        (setf peers (cons peer nil)
+              (cdr peers) peers))))
+
+(defmethod remove-peer ((socket round-robin-socket) peer)
+  (with-accessors ((peers peers))
+      socket
+    (cond ((and (eq peer (car peers))
+                (eq peers (cdr peers)))
+           (setf peers nil))
+          (t
+           (when (eq (car peers) peer)
+             (setf peers (cdr peers)))
+           (prog ((head peers))
+            repeat
+              (unless (eq peer (cadr head))
+                (setf head (cdr head))
+                (go repeat))
+              (setf (cdr head) (cddr head)))))))
+
+(defmethod next-peer ((socket round-robin-socket))
+  (setf (peers socket) (cdr (peers socket))))
+
+(defmethod find-peer ((socket round-robin-socket) &optional id)
+  (declare (ignore id))
+  (car (peers socket)))
+
+(defmethod map-peers ((socket round-robin-socket) func)
+  (prog ((head (peers socket)))
+   repeat
+     (when head
+       (funcall func (car hear))
+       (setf head (cdr head))
+       (unless (eq head (peers socket))
+         (go repeat)))))
+
+(defclass address-socket (socket)
+  ((%peers :reader peers
+           :initform (make-hash-table :test #'equalp))))
+
+(defmethod add-peer ((socket address-socket) peer)
+  (setf (gethash (routing-id peer) (peers socket))
+        peer))
+
+(defmethod remove-peer ((socket address-socket) peer)
+  (remhash (routing-id peer) socket))
+
+(defmethod map-peers ((socket address-socket) func)
+  (loop for peer being the hash-values of (peers socket)
+        do (funcall func peer)))
+
+(defmethod find-peer ((socket address-socket) &optional id)
+  (gethash id (peers socket)))
+
+(defmethod receive ((socket socket))
   (dequeue (input-queue socket)))
 
-(defmethod input-available-p ((socket nonblocking-socket))
+(defmethod input-available-p ((socket socket))
   (not (queue-empty-p (input-queue socket))))
 
-(defmethod start-connection (socket connection)
-  (write-greeting (target connection) "NULL" nil)
-  (read-greeting (target connection))
-  (handshake connection)
+(defmethod start-peer (socket peer)
+  (write-greeting (target peer) "NULL" nil)
+  (read-greeting (target peer))
+  (handshake peer)
   (update-wait-list socket))
 
 (defmethod send (stream command)
@@ -275,8 +312,8 @@
           command)
         (loop for index from 0
               for size = (if (logbitp +long-bit+ flags)
-                                   (read-uint64 stream)
-                                   (read-byte stream))
+                             (read-uint64 stream)
+                             (read-byte stream))
               for part = (funcall (object-factory socket index) index size)
               collect part into message
               do (receive-data socket part size)
@@ -284,13 +321,12 @@
                 return message
               do (setf flags (read-byte stream))))))
 
-(defmethod handshake ((socket connection))
+(defmethod handshake ((socket peer))
   (send socket (make-instance 'ready-command
                               :routing-id (routing-id (parent socket))
                               :socket-type (socket-type (parent socket))))
   (let ((response (receive socket)))
     (check-type response ready-command)
-    (push response a)
     (let ((routing-id (routing-id response)))
       (when routing-id
         (setf (routing-id socket) routing-id)))))
