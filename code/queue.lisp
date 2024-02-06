@@ -14,9 +14,9 @@
          :initform nil
          :type list)
    (access-lock :accessor access-lock
-                :initform (bordeaux-threads:make-lock))
+                :initform (bt2:make-lock))
    (not-empty-condition :accessor not-empty-condition
-                        :initform (bordeaux-threads:make-condition-variable))))
+                        :initform (bt2:make-condition-variable))))
 
 (defmethod enqueue ((queue queue) item)
   (with-accessors ((head head)
@@ -24,14 +24,14 @@
                    (access-lock access-lock)
                    (not-empty-condition not-empty-condition))
       queue
-    (bordeaux-threads:with-lock-held (access-lock)
+    (bt2:with-lock-held (access-lock)
       (let ((old-tail tail))
         (setf tail (list item))
         (cond (old-tail
                (rplacd old-tail tail))
               (t
                (setf head tail)
-               (bordeaux-threads:condition-notify not-empty-condition))))))
+               (bt2:condition-notify not-empty-condition))))))
   item)
 
 (defmethod dequeue ((queue queue))
@@ -40,21 +40,21 @@
                    (access-lock access-lock)
                    (not-empty-condition not-empty-condition))
       queue
-    (bordeaux-threads:with-lock-held (access-lock)
+    (bt2:with-lock-held (access-lock)
       (prog ()
        check
          (when head
            (unless (cdr head)
              (setf tail nil))
            (return (pop head)))
-         (bordeaux-threads:condition-wait not-empty-condition access-lock)
+         (bt2:condition-wait not-empty-condition access-lock)
          (go check)))))
 
 (defmethod queue-empty-p ((queue queue))
   (with-accessors ((head head)
                    (access-lock access-lock))
       queue
-    (bordeaux-threads:with-lock-held (access-lock)
+    (bt2:with-lock-held (access-lock)
       (null head))))
 
 (defclass null-queue ()

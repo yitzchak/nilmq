@@ -97,7 +97,7 @@
         (process (parent peer) peer (receive peer)))
     (sb-int:broken-pipe (condition)
       (declare (ignore condition))
-      (die (parent peer) peer)))
+      (remove-peer (parent peer) peer)))
   nil)
 
 (defmethod target ((object peer))
@@ -114,10 +114,10 @@
    (input-queue :reader input-queue
                 :initarg :input-queue
                 :initform (make-instance 'queue))
-   (access-lock :accessor access-lock
-                :initform (bt2:make-lock))))
+   (peer-lock :accessor peer-lock
+              :initform (bt2:make-lock))))
 
-(defmethod die ((socket socket) peer)
+(defmethod remove-peer ((socket socket) peer)
   (loop for k being the hash-keys of (endpoints socket)
           using (hash-value v)
         do (cond ((eq v peer)
@@ -171,7 +171,7 @@
       (setf (gethash endpoint (endpoints socket))
             (make-instance 'client :handle handle :address endpoint :parent socket)
             (peer endpoint) (make-instance 'peer :handle handle :parent socket))
-      (start-peer socket (peer endpoint))
+      (add-peer socket (peer endpoint))
       endpoint)))
 
 (defmethod poll ((socket socket))
@@ -181,23 +181,24 @@
   (loop for endpoint being the hash-value of (endpoints socket)
         for peer = (poll endpoint)
         when peer
-          do (start-peer socket peer)))
+          do (add-peer socket peer))
+  (map-peers socket #'poll))
 
 (defmethod add-peer :around ((socket socket) peer)
   (declare (ignore peer))
-  (bt2:with-lock-held ((access-lock socket))
+  (bt2:with-lock-held ((peer-lock socket))
     (call-next-method)))
 
 (defmethod remove-peer :around ((socket socket) peer)
   (declare (ignore peer))
-  (bt2:with-lock-held ((access-lock socket))
+  (bt2:with-lock-held ((peer-lock socket))
     (call-next-method)))
 
 (defclass round-robin-socket (socket)
   ((%peers :accessor peers
            :initform nil)))
 
-(defmethod add-peer ((socket round-robin-socket) peer)
+(defmethod add-peer :after ((socket round-robin-socket) peer)
   (with-accessors ((peers peers))
       socket
     (if peers
@@ -205,7 +206,7 @@
         (setf peers (cons peer nil)
               (cdr peers) peers))))
 
-(defmethod remove-peer ((socket round-robin-socket) peer)
+(defmethod remove-peer :after ((socket round-robin-socket) peer)
   (with-accessors ((peers peers))
       socket
     (cond ((and (eq peer (car peers))
@@ -241,11 +242,11 @@
   ((%peers :reader peers
            :initform (make-hash-table :test #'equalp))))
 
-(defmethod add-peer ((socket address-socket) peer)
+(defmethod add-peer :after ((socket address-socket) peer)
   (setf (gethash (routing-id peer) (peers socket))
         peer))
 
-(defmethod remove-peer ((socket address-socket) peer)
+(defmethod remove-peer :after ((socket address-socket) peer)
   (remhash (routing-id peer) socket))
 
 (defmethod map-peers ((socket address-socket) func)
@@ -255,13 +256,26 @@
 (defmethod find-peer ((socket address-socket) &optional id)
   (gethash id (peers socket)))
 
+(defclass pool-socket (socket)
+  ((%peers :accessor peers
+           :initform nil)))
+
+(defmethod add-peer :after ((socket pool-socket) peer)
+  (push peer (peers socket)))
+
+(defmethod remove-peer :after ((socket pool-socket) peer)
+  (setf (peers socket) (delete peer (peers socket))))
+
+(defmethod map-peers ((socket pool-socket) func)
+  (mapc func (peers socket)))
+
 (defmethod receive ((socket socket))
   (dequeue (input-queue socket)))
 
 (defmethod input-available-p ((socket socket))
   (not (queue-empty-p (input-queue socket))))
 
-(defmethod start-peer (socket peer)
+(defmethod add-peer (socket peer)
   (write-greeting (target peer) "NULL" nil)
   (read-greeting (target peer))
   (handshake peer)
