@@ -269,6 +269,27 @@
 (defmethod map-peers ((socket pool-socket) func)
   (mapc func (peers socket)))
 
+(defclass couple-socket (socket)
+  ((%peer :accessor peer
+          :initform nil)))
+
+(defmethod add-peer :before ((socket couple-socket) peer)
+  (when (peer socket)
+    (error "Already have a peer")))
+
+(defmethod add-peer :after ((socket couple-socket) peer)
+  (setf (peer socket) peer))
+
+(defmethod remove-peer :after ((socket couple-socket) peer)
+  (setf (peer socket) nil))
+
+(defmethod map-peers ((socket couple-socket) func)
+  (when (peer socket)
+    (funcall func (peer socket))))
+
+(defmethod find-peer ((socket couple-socket) &optional id)
+  (peer socket))
+
 (defmethod receive ((socket socket))
   (dequeue (input-queue socket)))
 

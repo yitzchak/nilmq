@@ -10,6 +10,7 @@
                "nontrivial-gray-streams"
                "usocket")
   :components ((:module "code"
+                :serial t
                 :components
                 ((:file "packages")
                  (:file "interface")
@@ -19,7 +20,10 @@
                  (:file "commands")
                  (:file "socket")
                  (:file "reqrep")
-                 (:file "pubsub")))))
+                 (:file "pubsub")
+                 (:file "pipeline")
+                 (:file "expair")
+                 (:file "channel")))))
 
 (asdf:defsystem "nilmq/test"
   :description "Tests for nilmq"
@@ -33,5 +37,6 @@
                "pzmq")
   :components ((:module "code"
                 :pathname #P"code/test/"
+                :serial t
                 :components
                 ((:file "packages")))))
