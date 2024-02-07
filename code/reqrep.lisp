@@ -94,9 +94,8 @@
 
 (defmethod send ((socket router-socket) (message cons))
   (let ((peer (find-peer socket (car message))))
-    (if peer
-        (send peer (cdr message))
-        (error "Unable to find peer for ~s routing-id" (car message)))))
+    (when peer
+      (send peer (cdr message)))))
 
 (defmethod process ((socket router-socket) (peer peer) (object cons))
   (enqueue (input-queue socket) (cons (routing-id peer) object)))

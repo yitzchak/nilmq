@@ -2,7 +2,7 @@
 
 (defparameter *context* nil)
 
-(defparameter *default-thread-count* 2)
+(defparameter *default-thread-count* 3)
 
 (defclass context ()
   ((object-factories :reader object-factories
@@ -27,10 +27,56 @@
    (%task-queue :accessor task-queue
                 :initform (make-instance 'queue))
    (%threads :accessor threads
-             :initform nil)))
+             :initform nil)
+   (%wait-list :accessor wait-list
+               :initform nil)
+   (%pollers :reader pollers
+             :initform (make-hash-table))
+   (poller-lock :accessor poller-lock
+              :initform (bt2:make-lock))))
 
 (defmethod context ((instance context))
   instance)
+
+(defun run-poller (context)
+  (when (wait-list context)
+    #+(or)(let ((handles (usocket:wait-for-input (wait-list context) :ready-only t :timeout .1)))
+      (when handles
+        (bt2:with-lock-held ((poller-lock context))
+          (loop with pollers = (pollers context)
+                for handle in handles
+                for func = (gethash handle pollers)
+                when func
+                  do (enqueue-task context func)))))
+    (usocket:wait-for-input (wait-list context) :timeout .1)
+    (bt2:with-lock-held ((poller-lock context))
+      (loop for handle being the hash-keys of (pollers context)
+              using (hash-value func)
+            when (usocket:socket-state handle)
+              do (enqueue-task context func)))
+    t))
+
+(defun update-pollers (context)
+  (let ((requeue (null (wait-list context))))
+    (setf (wait-list context)
+          (unless (zerop (hash-table-count (pollers context)))
+            (usocket:make-wait-list
+             (loop for handle being the hash-keys of (pollers context)
+                   collect handle))))
+    (when requeue
+      (enqueue-task context
+                    (lambda ()
+                      (run-poller context))))))
+
+(defun add-poller (context handle func)
+  (bt2:with-lock-held ((poller-lock context))
+    (setf (gethash handle (pollers context)) func))
+  (update-pollers context))
+
+(defun remove-poller (context handle)
+  (bt2:with-lock-held ((poller-lock context))
+    (remhash handle (pollers context)))
+  (update-pollers context))
 
 (defun default-object-factory (name size)
   (if (numberp name)

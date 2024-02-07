@@ -48,14 +48,6 @@
   ((%peers :accessor peers
            :initform nil)))
 
-(defmethod poll ((server server))
-  (when (usocket:socket-state (handle server))
-    (let ((peer (make-instance 'peer
-                               :parent (parent server)
-                               :handle (usocket:socket-accept (handle server)))))
-      (push peer (peers server))
-      peer)))
-
 (defclass client (endpoint)
   ((%peer :accessor peer
           :initarg :peer)))
@@ -91,11 +83,10 @@
         (delete (data object) (subscriptions peer)
                 :test #'equalp)))
 
-(defmethod poll ((peer peer))
+(defmethod do-read (peer)
   (handler-case
-      (when (listen (target peer))
-        (process (parent peer) peer (receive peer)))
-    (sb-int:broken-pipe (condition)
+      (process (parent peer) peer (receive peer))
+    (error (condition)
       (declare (ignore condition))
       (remove-peer (parent peer) peer)))
   nil)
@@ -106,8 +97,6 @@
 (defclass socket (context-mixin)
   ((endpoints :reader endpoints
               :initform (make-hash-table :test #'equalp))
-   (wait-list :accessor wait-list
-              :initform nil)
    (routing-id :accessor routing-id
                :initarg :routing-id
                :initform nil)
@@ -141,11 +130,12 @@
   (list (handle server)
         #+(or)(mapcar #'handle (peers server))))
 
-(defun update-wait-list (socket)
-  (setf (wait-list socket)
-        (usocket:make-wait-list
-         (loop for endpoint being the hash-values of (endpoints socket)
-               nconc (handles endpoint)))))
+(defun do-accept (server)
+  (let ((peer (make-instance 'peer
+                             :parent (parent server)
+                             :handle (usocket:socket-accept (handle server)))))
+    (push peer (peers server))
+    (add-peer (parent server) peer)))
 
 (defmethod bind ((socket socket) endpoint)
   (multiple-value-bind (protocol host port resource)
@@ -155,10 +145,13 @@
                                           :element-type '(unsigned-byte 8)
                                           :reuse-address t))
            (endpoint (format nil "tcp://~a:~a~@[/~a~]"
-                             host (usocket:get-local-port handle) resource)))
-      (setf (gethash endpoint (endpoints socket))
-            (make-instance 'server :handle handle :address endpoint :parent socket))
-      (update-wait-list socket)
+                             host (usocket:get-local-port handle) resource))
+           (server (make-instance 'server :handle handle :address endpoint :parent socket)))
+      (setf (gethash endpoint (endpoints socket)) server)
+      (add-poller (context socket) handle
+                  (lambda ()
+                    (do-accept server)
+                    nil))
       endpoint)))
 
 (defmethod connect ((socket socket) endpoint)
@@ -174,25 +167,22 @@
       (add-peer socket (peer endpoint))
       endpoint)))
 
-(defmethod poll ((socket socket))
-  (usocket:wait-for-input (wait-list socket)
-                          :ready-only t
-                          :timeout .05)
-  (loop for endpoint being the hash-value of (endpoints socket)
-        for peer = (poll endpoint)
-        when peer
-          do (add-peer socket peer))
-  (map-peers socket #'poll))
-
 (defmethod add-peer :around ((socket socket) peer)
   (declare (ignore peer))
   (bt2:with-lock-held ((peer-lock socket))
     (call-next-method)))
 
+(defmethod add-peer :after (socket peer)
+  (add-poller (context socket) (handle peer)
+              (lambda () (do-read peer))))
+
 (defmethod remove-peer :around ((socket socket) peer)
   (declare (ignore peer))
   (bt2:with-lock-held ((peer-lock socket))
     (call-next-method)))
+
+(defmethod remove-peer :before (socket peer)
+  (remove-poller (context socket) (handle peer)))
 
 (defclass round-robin-socket (socket)
   ((%peers :accessor peers
@@ -247,7 +237,7 @@
         peer))
 
 (defmethod remove-peer :after ((socket address-socket) peer)
-  (remhash (routing-id peer) socket))
+  (remhash (routing-id peer) (peers socket)))
 
 (defmethod map-peers ((socket address-socket) func)
   (loop for peer being the hash-values of (peers socket)
@@ -299,8 +289,7 @@
 (defmethod add-peer (socket peer)
   (write-greeting (target peer) "NULL" nil)
   (read-greeting (target peer))
-  (handshake peer)
-  (update-wait-list socket))
+  (handshake peer))
 
 (defmethod send (stream command)
   (let ((name (name command)))

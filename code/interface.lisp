@@ -10,21 +10,9 @@
 
 (defgeneric find-peer (self &optional id))
 
-(defgeneric poll (object)
-  (:method (object)
-    (declare (ignore object))
-    nil))
-
 (defgeneric routing-id (object))
 
-(defgeneric make-socket (type &key context)
-  (:method :around (type &key context)
-    (declare (ignore type context))
-    (let ((socket (call-next-method)))
-      (enqueue-task socket (lambda ()
-                             (poll socket)
-                             t))
-      socket)))
+(defgeneric make-socket (type &key context))
 
 (defgeneric subscribe (socket topic))
 
