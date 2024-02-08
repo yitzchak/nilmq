@@ -24,7 +24,9 @@
     (when (and (active socket)
                (eq peer (find-peer socket)))
       (enqueue (input-queue socket) (cdr (member-if (lambda (x) (zerop (length x))) object)))
-      (bt2:signal-semaphore (active-semaphore socket)))))
+      (setf active nil)
+      (next-peer socket)
+      #+(or)(bt2:signal-semaphore (active-semaphore socket)))))
 
 (defmethod send ((socket req-socket) (message cons))
   (with-accessors ((active active)
@@ -32,19 +34,17 @@
                    (active-semaphore active-semaphore))
       socket
     (bt2:with-lock-held (send-lock)
-      (send (find-peer socket) (cons #() message))
+      (send (target (find-peer socket)) (cons #() message))
       (setf active t)
-      (bt2:wait-on-semaphore active-semaphore)
-      (setf active nil)
-      (next-peer socket)))
+      #+(or)(bt2:wait-on-semaphore active-semaphore)))
   nil)
 
 ;;; The REP Socket Type
 ;;; https://rfc.zeromq.org/spec/28/#the-rep-socket-type
 
 (defclass rep-socket (pool-socket)
-  ((%output-queue :accessor output-queue
-                  :initform (make-instance 'queue))))
+  ((%address-queue :accessor address-queue
+                   :initform (make-instance 'queue))))
 
 (defmethod socket-type ((socket rep-socket))
   "REP")
@@ -53,13 +53,17 @@
   (make-instance 'rep-socket :context context))
 
 (defmethod process ((socket rep-socket) (peer peer) (object cons))
-  (let ((delimiter (member-if (lambda (x) (zerop (length x))) object)))
-    (enqueue (input-queue socket) (cdr delimiter))
-    (setf (cdr delimiter) (dequeue (output-queue socket)))
-    (send (target peer) object)))
+  (setf (skip-read-p peer) t)
+  (let* ((delimiter (member-if (lambda (x) (zerop (length x))) object))
+         (message (cdr delimiter)))
+    (setf (cdr delimiter) nil)
+    (enqueue (address-queue socket) (cons peer object))
+    (enqueue (input-queue socket) message)))
 
 (defmethod send ((socket rep-socket) (message cons))
-  (enqueue (output-queue socket) message))
+  (destructuring-bind (peer . address)
+      (dequeue (address-queue socket))
+    (send peer (nconc address message))))
 
 ;;; The DEALER Socket Type
 ;;; https://rfc.zeromq.org/spec/28/#the-dealer-socket-type

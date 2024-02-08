@@ -1,8 +1,12 @@
 (defpackage #:nilmq
   (:use #:cl)
+  (:shadow #:close)
   (:export #:bind
            #:cancel-command
+           #:close
            #:connect
+           #:destroy-context
+           #:destroy-socket
            #:error-command
            #:handshake
            #:input-available-p
@@ -20,6 +24,7 @@
            #:send
            #:send-data
            #:serialize-data
-           #:shutdown
            #:subscribe-command
-           #:target))
+           #:target
+           #:with-context
+           #:with-socket))

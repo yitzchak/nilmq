@@ -39,4 +39,5 @@
                 :pathname #P"code/test/"
                 :serial t
                 :components
-                ((:file "packages")))))
+                        ((:file "packages")
+                         (:file "reqrep")))))

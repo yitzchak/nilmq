@@ -83,7 +83,7 @@
                 :initarg :socket-type
                 :type string)
    (resource :accessor resource
-             :initarg :socket-type
+             :initarg :resource
              :type string)))
 
 (defmethod name ((command ready-command))

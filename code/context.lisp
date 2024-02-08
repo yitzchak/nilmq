@@ -109,6 +109,17 @@
                                   :initial-bindings specials)
                  (threads context))))
 
+(defmethod close ((context context))
+  (mapc #'bt2:destroy-thread (threads context))
+  (setf (threads context) nil))
+
+(defmacro with-context ((name &rest options) &body body)
+  (let ((name (or name '*context*)))
+    `(let ((,name (make-context ,@options)))
+       (unwind-protect
+            (progn ,@body)
+         (close ,name)))))
+
 (defclass context-mixin ()
   ((%context :reader context
              :initarg :context)))

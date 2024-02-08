@@ -48,9 +48,14 @@
   ((%peers :accessor peers
            :initform nil)))
 
+(defmethod close ((instance server))
+  (usocket:socket-close (handle instance)))
+
 (defclass client (endpoint)
   ((%peer :accessor peer
           :initarg :peer)))
+
+(defmethod close ((instance client)))
 
 (defclass peer ()
   ((%parent :accessor parent
@@ -62,7 +67,12 @@
                 :initform nil)
    (%subscriptions :accessor subscriptions
                    :initarg :subscriptions
-                   :initform nil)))
+                   :initform nil)
+   (%skip-read :accessor skip-read-p
+               :initform nil)))
+
+(defmethod close ((instance peer))
+  (usocket:socket-close (handle instance)))
 
 (defmethod context ((object peer))
   (context (parent object)))
@@ -71,6 +81,7 @@
   (enqueue-task (parent peer)
                 (lambda ()
                   (send (target peer) object)
+                  (setf (skip-read-p peer) nil)
                   nil)))
 
 (defmethod process (socket (peer peer) (object subscribe-command))
@@ -84,11 +95,12 @@
                 :test #'equalp)))
 
 (defmethod do-read (peer)
-  (handler-case
-      (process (parent peer) peer (receive peer))
-    (error (condition)
-      (declare (ignore condition))
-      (remove-peer (parent peer) peer)))
+  (unless (skip-read-p peer)
+    (handler-case
+        (process (parent peer) peer (receive peer))
+      (error (condition)
+        (declare (ignore condition))
+        (remove-peer (parent peer) peer))))
   nil)
 
 (defmethod target ((object peer))
@@ -106,6 +118,11 @@
    (peer-lock :accessor peer-lock
               :initform (bt2:make-lock))))
 
+(defmethod close ((socket socket))
+  (map-peers socket #'close)
+  (loop for endpoint being the hash-values of (endpoints socket)
+        do (close endpoint)))
+
 (defmethod remove-peer ((socket socket) peer)
   (loop for k being the hash-keys of (endpoints socket)
           using (hash-value v)
@@ -113,22 +130,6 @@
                   (remhash k (endpoints socket)))
                  ((typep v 'server)
                   (setf (peers v) (delete peer (peers v)))))))
-
-(defmethod shutdown ((object socket))
-  (loop for endpoint being the hash-values of (endpoints object)
-        do (usocket:socket-close (handle endpoint))))
-
-(defgeneric handles (object)
-  (:method (object)
-    (declare (ignore object))
-    nil))
-
-(defmethod handles ((client client))
-  nil);(list (handle client)))
-
-(defmethod handles ((server server))
-  (list (handle server)
-        #+(or)(mapcar #'handle (peers server))))
 
 (defun do-accept (server)
   (let ((peer (make-instance 'peer
@@ -160,11 +161,11 @@
     (declare (ignore protocol))
     (let* ((handle (usocket:socket-connect host port :element-type '(unsigned-byte 8)))
            (endpoint (format nil "tcp://~a:~a~@[/~a~]"
-                             host (usocket:get-local-port handle) resource)))
-      (setf (gethash endpoint (endpoints socket))
-            (make-instance 'client :handle handle :address endpoint :parent socket)
-            (peer endpoint) (make-instance 'peer :handle handle :parent socket))
-      (add-peer socket (peer endpoint))
+                             host (usocket:get-local-port handle) resource))
+           (client (make-instance 'client :handle handle :address endpoint :parent socket)))
+      (setf (gethash endpoint (endpoints socket)) client
+            (peer client) (make-instance 'peer :handle handle :parent socket))
+      (add-peer socket (peer client))
       endpoint)))
 
 (defmethod add-peer :around ((socket socket) peer)
@@ -184,6 +185,11 @@
 (defmethod remove-peer :before (socket peer)
   (remove-poller (context socket) (handle peer)))
 
+(defmethod map-peers :around ((socket socket) func)
+  (declare (ignore func))
+  (bt2:with-lock-held ((peer-lock socket))
+    (call-next-method)))
+
 (defclass round-robin-socket (socket)
   ((%peers :accessor peers
            :initform nil)))
@@ -192,7 +198,7 @@
   (with-accessors ((peers peers))
       socket
     (if peers
-        (setf (cdr peers) (cons peer (cddr peers)))
+        (setf (cdr peers) (cons peer (cdr peers)))
         (setf peers (cons peer nil)
               (cdr peers) peers))))
 
@@ -223,8 +229,7 @@
   (prog ((head (peers socket)))
    repeat
      (when head
-       (funcall func (car hear))
-       (setf head (cdr head))
+       (funcall func (pop head))
        (unless (eq head (peers socket))
          (go repeat)))))
 
@@ -346,11 +351,18 @@
               do (setf flags (read-byte stream))))))
 
 (defmethod handshake ((socket peer))
-  (send socket (make-instance 'ready-command
-                              :routing-id (routing-id (parent socket))
-                              :socket-type (socket-type (parent socket))))
+  (send (target socket)
+        (make-instance 'ready-command
+                       :routing-id (routing-id (parent socket))
+                       :socket-type (socket-type (parent socket))))
   (let ((response (receive socket)))
     (check-type response ready-command)
     (let ((routing-id (routing-id response)))
       (when routing-id
         (setf (routing-id socket) routing-id)))))
+
+(defmacro with-socket ((name &rest options) &body body)
+  `(let ((,name (make-socket ,@options)))
+     (unwind-protect
+          (progn ,@body)
+       (close ,name))))

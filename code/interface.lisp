@@ -2,6 +2,8 @@
 
 (defgeneric context (instance))
 
+(defgeneric close (instance))
+
 (defgeneric enqueue-task (instance func))
 
 (defgeneric add-peer (self peer))
@@ -23,8 +25,6 @@
 (defgeneric connect (socket endpoint))
 
 (defgeneric input-available-p (socket))
-
-(defgeneric shutdown (socket))
 
 (defgeneric resource (socket))
 
