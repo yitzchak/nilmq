@@ -69,7 +69,9 @@
                    :initarg :subscriptions
                    :initform nil)
    (%skip-read :accessor skip-read-p
-               :initform nil)))
+               :initform nil)
+   (%lock :accessor lock
+          :initform (bt2:make-lock))))
 
 (defmethod close ((instance peer))
   (usocket:socket-close (handle instance)))
@@ -80,8 +82,9 @@
 (defmethod send ((peer peer) object)
   (enqueue-task (parent peer)
                 (lambda ()
-                  (send (target peer) object)
-                  (setf (skip-read-p peer) nil)
+                  (bt2:with-lock-held ((lock peer))
+                    (send (target peer) object)
+                    (setf (skip-read-p peer) nil))
                   nil)))
 
 (defmethod process (socket (peer peer) (object subscribe-command))
@@ -327,28 +330,29 @@
         do (send-data stream part data)
            (finish-output stream)))
 
-(defmethod receive (socket)
-  (let* ((stream (target socket))
-         (flags (read-byte stream)))
-    (if (logbitp +command-bit+ flags)
-        (let* ((size (if (logbitp +long-bit+ flags)
-                         (read-uint64 stream)
-                         (read-byte stream)))
-               (name (read-vstring stream))
-               (data-size (- size (length name) 1))
-               (command (funcall (object-factory socket name) name data-size)))
-          (receive-data socket command data-size)
-          command)
-        (loop for index from 0
-              for size = (if (logbitp +long-bit+ flags)
-                             (read-uint64 stream)
-                             (read-byte stream))
-              for part = (funcall (object-factory socket index) index size)
-              collect part into message
-              do (receive-data socket part size)
-              unless (logbitp +more-bit+ flags)
-                return message
-              do (setf flags (read-byte stream))))))
+(defmethod receive ((peer peer))
+  (bt2:with-lock-held ((lock peer))
+    (let* ((stream (target peer))
+           (flags (read-byte stream)))
+      (if (logbitp +command-bit+ flags)
+          (let* ((size (if (logbitp +long-bit+ flags)
+                           (read-uint64 stream)
+                           (read-byte stream)))
+                 (name (read-vstring stream))
+                 (data-size (- size (length name) 1))
+                 (command (funcall (object-factory peer name) name data-size)))
+            (receive-data peer command data-size)
+            command)
+          (loop for index from 0
+                for size = (if (logbitp +long-bit+ flags)
+                               (read-uint64 stream)
+                               (read-byte stream))
+                for part = (funcall (object-factory peer index) index size)
+                collect part into message
+                do (receive-data peer part size)
+                unless (logbitp +more-bit+ flags)
+                  return message
+                do (setf flags (read-byte stream)))))))
 
 (defmethod handshake ((socket peer))
   (send (target socket)
