@@ -53,12 +53,13 @@
   (make-instance 'rep-socket :context context))
 
 (defmethod process ((socket rep-socket) (peer peer) (object cons))
-  (setf (skip-read-p peer) t)
-  (let* ((delimiter (member-if (lambda (x) (zerop (length x))) object))
-         (message (cdr delimiter)))
-    (setf (cdr delimiter) nil)
-    (enqueue (address-queue socket) (cons peer object))
-    (enqueue (input-queue socket) message)))
+  (loop for (part . message) on object
+        initially (setf (skip-read-p peer) t)
+        collect part into address
+        when (and (typep part sequence)
+                  (zerop (length part)))
+          do (enqueue (address-queue socket) (cons peer address))
+             (enqueue (input-queue socket) message)))
 
 (defmethod send ((socket rep-socket) (message cons))
   (destructuring-bind (peer . address)
