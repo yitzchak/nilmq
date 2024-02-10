@@ -57,6 +57,11 @@
 
 (defmethod close ((instance client)))
 
+(defgeneric skip-read-p (socket peer)
+  (:method (socket peer)
+    (declare (ignore socket peer))
+    nil))
+
 (defclass peer ()
   ((%parent :accessor parent
             :initarg :parent)
@@ -68,8 +73,6 @@
    (%subscriptions :accessor subscriptions
                    :initarg :subscriptions
                    :initform nil)
-   (%skip-read :accessor skip-read-p
-               :initform nil)
    (%lock :accessor lock
           :initform (bt2:make-lock))))
 
@@ -82,9 +85,12 @@
 (defmethod send ((peer peer) object)
   (enqueue-task (parent peer)
                 (lambda ()
-                  (bt2:with-lock-held ((lock peer))
-                    (send (target peer) object)
-                    (setf (skip-read-p peer) nil))
+                  (handler-case
+                      (bt2:with-lock-held ((lock peer))
+                        (send (target peer) object))
+                    (error (condition)
+                      (declare (ignore condition))
+                      (remove-peer (parent peer) peer)))
                   nil)))
 
 (defmethod process (socket (peer peer) (object subscribe-command))
@@ -98,7 +104,7 @@
                 :test #'equalp)))
 
 (defmethod do-read (peer)
-  (unless (skip-read-p peer)
+  (unless (skip-read-p (parent peer) peer)
     (handler-case
         (process (parent peer) peer (receive peer))
       (error (condition)

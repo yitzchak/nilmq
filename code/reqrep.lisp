@@ -43,8 +43,12 @@
 ;;; https://rfc.zeromq.org/spec/28/#the-rep-socket-type
 
 (defclass rep-socket (pool-socket)
-  ((%address-queue :accessor address-queue
-                   :initform (make-instance 'queue))))
+  ((%address :accessor address
+             :initform nil)))
+
+(defmethod skip-read-p ((socket rep-socket) peer)
+  (declare (ignore peer))
+  (and (address socket) t))
 
 (defmethod socket-type ((socket rep-socket))
   "REP")
@@ -52,19 +56,22 @@
 (defmethod make-socket ((type (eql :rep)) &key (context *context*))
   (make-instance 'rep-socket :context context))
 
-(defmethod process ((socket rep-socket) (peer peer) (object cons))
-  (loop for (part . message) on object
-        initially (setf (skip-read-p peer) t)
-        collect part into address
-        when (and (typep part sequence)
-                  (zerop (length part)))
-          do (enqueue (address-queue socket) (cons peer address))
-             (enqueue (input-queue socket) message)))
+(defmethod process ((socket rep-socket) (peer peer) (message cons))
+  (prog (address)
+   repeat
+     (push (pop message) address)
+     (unless (or (null message)
+                 (zerop (length (car address))))
+       (go repeat))
+     (setf (address socket) (cons peer (nreverse address)))
+     (enqueue (input-queue socket) message)))
 
 (defmethod send ((socket rep-socket) (message cons))
-  (destructuring-bind (peer . address)
-      (dequeue (address-queue socket))
-    (send peer (nconc address message))))
+  (with-accessors ((address address))
+      socket
+    (when address
+      (send (car address) (nconc (cdr address) message))
+      (setf address nil))))
 
 ;;; The DEALER Socket Type
 ;;; https://rfc.zeromq.org/spec/28/#the-dealer-socket-type
